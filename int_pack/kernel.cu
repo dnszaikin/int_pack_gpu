@@ -225,6 +225,7 @@ void parleHost(int *h_in, int n,
 	d_in = generateData();
 	cudaMemcpy(d_in, h_in, n * sizeof(int), cudaMemcpyHostToDevice);
 
+
 	// RUN.    
 	parleDevice(d_in, n, d_symbolsOut, d_countsOut, d_totalRuns);
 
