@@ -5,6 +5,19 @@
 #include <stdio.h>
 #include <random>
 
+#include <cuda.h>
+#include <thrust/device_vector.h>
+#include <thrust/host_vector.h>
+#include <thrust/transform.h>
+#include <nvfunctional>
+
+#include <iostream>
+#include <math.h>
+#include <omp.h>
+#include <vector>
+
+using namespace std;
+
 constexpr int MAX_N = 10;
 char errorString[256];
 
@@ -110,16 +123,65 @@ __global__ void scatterKernel(int* g_compactedBackwardMask, int* g_totalRuns, in
 
 __global__ void maskKernel(int *g_in, int* g_backwardMask, int n) {
 	for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x) {
-		printf("%d\n", i);
-		printf("%d\n", g_in[i] != g_in[i - 1]);
 		if (i == 0) {
 			g_backwardMask[i] = 1;
-			printf("-%d\n", __LINE__);
 		} else {
 			g_backwardMask[i] = (g_in[i] != g_in[i - 1]);
-			printf("--%d\n", __LINE__);
 		}
 	}
+}
+
+__global__ void maskKernelVec(int* in, int* out, int n) {
+	for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x) {
+		if (i == 0) {
+			out[i] = 1;
+		}
+		else {
+			out[i] = (in[i] != in[i - 1]);
+		}
+	}
+}
+
+thrust::device_vector<int> gpuEncoding(thrust::device_vector<int> rle) {
+	thrust::device_vector<int> arrayCompressed(rle.size());
+
+	//auto f =  __device__() {
+	//	for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < rle.size(); i += blockDim.x * gridDim.x) {
+	//		if (i == 0) {
+	//			arrayCompressed[i] = 1;
+	//		}
+	//		else {
+	//			arrayCompressed[i] = (rle[i] != rle[i - 1]);
+	//		}
+	//	}
+	//};
+	//// GPU - Elegant Pair Function
+	//int prev = -1;
+
+	//auto gpuElegantPair = [prev] __device__(int element) {
+
+	//	int result = element;
+	//	int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+	//	printf("%d\n",i);
+
+	//	printf("curr: %d, prev: %d\n", element, prev);
+
+	//	if (i == 0) {
+	//		result = 1;
+	//	}
+	//	else {
+	//		//result = 
+	//	}
+
+	//	prev = element;
+
+	//	return element;
+	//};
+	
+	//thrust::transform(rle.begin(), rle.end(), arrayCompressed.begin(), gpuElegantPair);
+
+	return arrayCompressed;
 }
 
 //native scan
@@ -151,8 +213,32 @@ void parleDevice(int *d_in, int n,
 	int* d_totalRuns
 ) {
 	int tmp[MAX_N];
-
 	const int blocks = 32 * numSMs;
+
+	thrust::host_vector<int> rle(MAX_N);
+
+	// Initialize Vectors CPU
+	for (int i = 0; i < MAX_N; i++) {
+		rle[i] = 1;
+	}
+
+	thrust::device_vector<int> d_rle = rle;
+
+	thrust::device_vector<int> arrayCompressedDevice;
+
+	arrayCompressedDevice.resize(rle.size());
+
+	int* _in = thrust::raw_pointer_cast(d_rle.data());
+	int* _out = thrust::raw_pointer_cast(arrayCompressedDevice.data());
+
+	maskKernelVec<<<blocks, 256>>>(_in, _out, n);
+
+	thrust::host_vector<int> arrayCompressedHost = arrayCompressedDevice;
+
+	for (int i = 0; i < arrayCompressedHost.size(); i++) {
+		cout << arrayCompressedHost[i] << endl;
+	}
+	
 	maskKernel<<<blocks,256>>>(d_in, d_backwardMask, n);
 
 	cudaMemcpy(tmp, d_backwardMask, n * sizeof(int), cudaMemcpyDeviceToHost);
