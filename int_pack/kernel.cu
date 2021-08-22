@@ -9,6 +9,8 @@
 #include <thrust/device_vector.h>
 #include <thrust/host_vector.h>
 #include <thrust/transform.h>
+#include <thrust/execution_policy.h>
+
 #include <nvfunctional>
 
 #include <iostream>
@@ -18,7 +20,7 @@
 
 using namespace std;
 
-constexpr int MAX_N = 10;
+constexpr int MAX_N = 1'000'000;
 char errorString[256];
 
 // global host memory arrays.
@@ -58,6 +60,16 @@ int* generateData()
 	return g_in;
 }
 
+int generateCompressibleRandomData() {
+	int val = rand() % 100;
+
+	if (rand() % 10 == 0) {
+		val = rand() % 100;
+	}
+
+	return 10;
+}
+
 int rleCpu(int *in, int n, int* symbolsOut, int* countsOut) {
 
 	if (n == 0)
@@ -92,11 +104,26 @@ int rleCpu(int *in, int n, int* symbolsOut, int* countsOut) {
 	return outIndex;
 }
 
-__global__ void compactKernel(int* g_in, int* g_scannedBackwardMask, int* g_compactedBackwardMask, int* g_totalRuns, int n) {
-	for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x) {
+__global__ void maskKernelVec(int* in, int* out, int n) 
+{
+	for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x) 
+	{
+		if (i == 0) {
+			out[i] = 1;
+		}
+		else {
+			out[i] = (in[i] != in[i - 1]);
+		}
+	}
+}
+
+__global__ void compactKernel(int* g_scannedBackwardMask, int* g_compactedBackwardMask, int* g_totalRuns, int n) 
+{
+	for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x) 
+	{
 
 		if (i == (n - 1)) {
-			g_compactedBackwardMask[g_scannedBackwardMask[i] + 0] = i + 1;
+			g_compactedBackwardMask[g_scannedBackwardMask[i]] = i + 1;
 			*g_totalRuns = g_scannedBackwardMask[i];
 		}
 
@@ -118,27 +145,6 @@ __global__ void scatterKernel(int* g_compactedBackwardMask, int* g_totalRuns, in
 
 		g_symbolsOut[i] = g_in[a];
 		g_countsOut[i] = b - a;
-	}
-}
-
-__global__ void maskKernel(int *g_in, int* g_backwardMask, int n) {
-	for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x) {
-		if (i == 0) {
-			g_backwardMask[i] = 1;
-		} else {
-			g_backwardMask[i] = (g_in[i] != g_in[i - 1]);
-		}
-	}
-}
-
-__global__ void maskKernelVec(int* in, int* out, int n) {
-	for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x) {
-		if (i == 0) {
-			out[i] = 1;
-		}
-		else {
-			out[i] = (in[i] != in[i - 1]);
-		}
 	}
 }
 
@@ -184,82 +190,13 @@ thrust::device_vector<int> gpuEncoding(thrust::device_vector<int> rle) {
 	return arrayCompressed;
 }
 
-//native scan
-__global__ void scan(int *g_odata, int *g_idata, int n) {
-	extern __shared__ float temp[]; // allocated on invocation    
-	int thid = threadIdx.x;   
-	int pout = 0, pin = 1;   
-	// Load input into shared memory.    
-	// This is exclusive scan, so shift right by one    
-	// and set first element to 0   
-	temp[pout*n + thid] = (thid > 0) ? g_idata[thid-1] : 0;   
-	__syncthreads();   
-	for (int offset = 1; offset < n; offset *= 2)   {     
-		pout = 1 - pout; // swap double buffer indices     
-		pin = 1 - pout;     
-		if (thid >= offset)       
-			temp[pout*n+thid] += temp[pin*n+thid - offset];     
-		else       
-			temp[pout*n+thid] = temp[pin*n+thid];     
-		__syncthreads();   
-	}   
-	g_odata[thid] = temp[pout*n+thid]; // write output 
-} 
-
-// run parle on the GPU
-void parleDevice(int *d_in, int n,
-	int* d_symbolsOut,
-	int* d_countsOut,
-	int* d_totalRuns
-) {
-	int tmp[MAX_N];
-	const int blocks = 32 * numSMs;
-
-	thrust::host_vector<int> rle(MAX_N);
-
-	// Initialize Vectors CPU
-	for (int i = 0; i < MAX_N; i++) {
-		rle[i] = 1;
-	}
-
-	thrust::device_vector<int> d_rle = rle;
-
-	thrust::device_vector<int> arrayCompressedDevice;
-
-	arrayCompressedDevice.resize(rle.size());
-
-	int* _in = thrust::raw_pointer_cast(d_rle.data());
-	int* _out = thrust::raw_pointer_cast(arrayCompressedDevice.data());
-
-	maskKernelVec<<<blocks, 256>>>(_in, _out, n);
-
-	thrust::host_vector<int> arrayCompressedHost = arrayCompressedDevice;
-
-	for (int i = 0; i < arrayCompressedHost.size(); i++) {
-		cout << arrayCompressedHost[i] << endl;
-	}
-	
-	maskKernel<<<blocks,256>>>(d_in, d_backwardMask, n);
-
-	cudaMemcpy(tmp, d_backwardMask, n * sizeof(int), cudaMemcpyDeviceToHost);
-
-	printArray(tmp, n);
-
-	cudaMemcpy(tmp, d_in, n * sizeof(int), cudaMemcpyDeviceToHost);
-
-	printArray(tmp, n);
-
-	scan<<<blocks,256>>>(d_backwardMask, d_scannedBackwardMask, n);
-	compactKernel<<<blocks,256>>>(d_in, d_scannedBackwardMask, d_compactedBackwardMask, d_totalRuns, n);
-	scatterKernel<<<blocks,256>>>(d_compactedBackwardMask, d_totalRuns, d_in, d_symbolsOut, d_countsOut);
-}
-
 bool verifyCompression(
 	int* original, int n,
 	int* compressedSymbols, int* compressedCounts, int totalRuns) {
 
 	// decompress.
 	int j = 0;
+	int* g_decompressed = new int[MAX_N]();
 
 	int sum = 0;
 	for (int i = 0; i < totalRuns; ++i) {
@@ -287,16 +224,147 @@ bool verifyCompression(
 		}
 	}
 
+	bool flag = true;
+
 	// verify the compression.
 	for (int i = 0; i < n; ++i) {
 		if (original[i] != g_decompressed[i]) {
 
 			sprintf(errorString, "Decompressed and original not equal at %d, %d != %d\n", i, original[i], g_decompressed[i]);
-			return false;
+			flag = false;
 		}
 	}
 
-	return true;
+	delete[] g_decompressed;
+
+	return flag;
+}
+
+// run parle on the GPU
+void parleDevice(int *d_in, int n,
+	int* d_symbolsOut,
+	int* d_countsOut,
+	int* d_totalRuns
+) {
+	const int blocks = 32 * numSMs;
+
+	thrust::host_vector<int> h_rle(MAX_N);
+
+	//thrust::generate(h_rle.begin(), h_rle.end(), []() { return rand() % 100; });
+	thrust::generate(h_rle.begin(), h_rle.end(), generateCompressibleRandomData);
+
+	//h_rle[0] = 1;
+	//h_rle[1] = 2;
+	//h_rle[2] = 3;
+	//h_rle[3] = 6;
+	//h_rle[4] = 6;
+	//h_rle[5] = 6;
+	//h_rle[6] = 5;
+	//h_rle[7] = 5;
+
+	thrust::device_vector<int> d_rle = h_rle;
+	thrust::device_vector<int> d_mask;
+
+	// Initialize Vectors CPU
+	//for (int i = 0; i < MAX_N; i++) {
+	//	rle[i] = 1;
+	//}
+
+	d_mask.resize(h_rle.size());
+
+	int* d_rle_ptr = thrust::raw_pointer_cast(d_rle.data());
+	int* d_mask_ptr = thrust::raw_pointer_cast(d_mask.data());
+
+	maskKernelVec<<<blocks, 256>>>(d_rle_ptr, d_mask_ptr, n);
+
+	thrust::host_vector<int> h_tmp = d_mask;
+
+	//for (int i = 0; i < h_tmp.size(); i++) {
+	//	cout << h_tmp[i] << endl;
+	//}
+
+	//cout << endl;
+
+	thrust::inclusive_scan(thrust::device, d_mask.begin(), d_mask.end(), d_mask.begin());
+
+	//h_tmp = d_mask;
+
+	//for (int i = 0; i < h_tmp.size(); i++) {
+	//	cout << h_tmp[i] << endl;
+	//}
+
+	//cout << endl;
+
+	thrust::device_vector<int> d_compact_mask;
+
+	d_compact_mask.resize(h_rle.size());
+
+	thrust::device_vector<int> d_total_pairs(1);
+
+	int* d_compact_mask_ptr = thrust::raw_pointer_cast(d_compact_mask.data());
+	int* d_total_pairs_ptr = thrust::raw_pointer_cast(d_total_pairs.data());
+
+	compactKernel<<<blocks,256>>>(d_mask_ptr, d_compact_mask_ptr, d_total_pairs_ptr, n);
+
+	//h_tmp = d_compact_mask;
+
+	//for (int i = 0; i < h_tmp.size(); i++) {
+	//	cout << h_tmp[i] << endl;
+	//}
+
+	//cout << endl;
+
+	h_tmp = d_total_pairs;
+
+	int h_total_pairs = h_tmp[0];
+
+	thrust::device_vector<int> d_compact_rle_chars;
+
+	d_compact_rle_chars.resize(h_rle.size());
+
+	thrust::device_vector<int> d_compact_rle_counts;
+
+	d_compact_rle_counts.resize(h_rle.size());
+
+	int* d_compact_rle_chars_ptr = thrust::raw_pointer_cast(d_compact_rle_chars.data());
+	int* d_compact_rle_counts_ptr = thrust::raw_pointer_cast(d_compact_rle_counts.data());
+
+	scatterKernel<<<blocks,256>>>(d_compact_mask_ptr, d_total_pairs_ptr, d_rle_ptr, d_compact_rle_chars_ptr, d_compact_rle_counts_ptr);
+
+	d_compact_rle_chars.resize(h_total_pairs);
+	d_compact_rle_counts.resize(h_total_pairs);
+
+	h_tmp = d_compact_rle_chars;
+
+	//for (int i = 0; i < h_tmp.size(); i++) {
+	//	cout << h_tmp[i] << endl;
+	//}
+
+	//cout << endl;
+
+	//h_tmp = d_compact_rle_counts;
+
+	//for (int i = 0; i < h_tmp.size(); i++) {
+	//	cout << h_tmp[i] << endl;
+	//}
+
+	cudaDeviceSynchronize();
+
+	cout << "Original size: " << n << endl;
+	cout << "Compressed size: " << h_total_pairs * 2 << endl;
+
+	thrust::host_vector<int> h_compact_rle_chars = d_compact_rle_chars;
+	thrust::host_vector<int> h_compact_rle_counts = d_compact_rle_counts;
+
+	if (!verifyCompression(
+		h_rle.data(), n,
+		h_compact_rle_chars.data(), h_compact_rle_counts.data(), h_total_pairs)) {
+		printf("Failed test %s\n", errorString);
+		exit(1);
+	}
+	else {
+		printf("passed test!\n\n");
+	}
 }
 
 // On the CPU do preparation to run parle, launch PARLE on GPU, and then transfer the result data to the CPU. 
@@ -326,19 +394,17 @@ void parleHost(int *h_in, int n,
 	printf("Original Size  : %d\n", n);
 	printf("Compressed Size: %d\n", h_totalRuns * 2);
 
-	if (!verifyCompression(
-		d_in, n,
-		g_symbolsOut, g_countsOut, h_totalRuns)) {
-		printf("Failed test %s\n", errorString);
-		printArray(d_in, n);
+	//if (!verifyCompression(
+	//	d_in, n,
+	//	g_symbolsOut, g_countsOut, h_totalRuns)) {
+	//	printf("Failed test %s\n", errorString);
+	////	printArray(d_in, n);
 
-		exit(1);
-	}
-	else {
-		printf("passed test!\n\n");
-	}
-
-
+	//	exit(1);
+	//}
+	//else {
+	//	printf("passed test!\n\n");
+	//}
 }
 
 void printError(const char* msg, cudaError_t err) 
