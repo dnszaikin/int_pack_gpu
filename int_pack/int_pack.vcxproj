@@ -79,7 +79,14 @@
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <CudaCompile Include="kernel.cu" />
+    <CudaCompile Include="main.cpp" />
+    <CudaCompile Include="cuda_util.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="CpuRLE.h" />
+    <ClInclude Include="ParallelRLE.cuh" />
+    <ClInclude Include="ParallelRLE.h" />
+    <ClInclude Include="IArchiver.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
