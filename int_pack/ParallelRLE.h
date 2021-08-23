@@ -137,15 +137,20 @@ public:
 		int* d_decomp_rle_ptr{ thrust::raw_pointer_cast(d_decomp_rle.data()) };
 		int* d_decomp_mask_ptr{ thrust::raw_pointer_cast(d_decomp_mask.data()) };
 
-		for (int i = 0; i < h_counts.size(); ++i) {
-			int j = 0;
-			for (int _i = 0; _i < i; ++_i) {
-				int count = h_counts[_i];
-				j += count;
-			}
-			d_decomp_mask[i] = j;
-		}
+		//for (int i = 0; i < h_counts.size(); ++i) {
+		//	int j = 0;
+		//	for (int _i = 0; _i < i; ++_i) {
+		//		int count = h_counts[_i];
+		//		j += count;
+		//	}
+		//	d_decomp_mask[i] = j;
+		//}
 
+		thrust::exclusive_scan(thrust::device, d_compact_rle_counts.begin(), d_compact_rle_counts.end(), d_decomp_mask.begin());
+		print_vector("d_decomp_mask", d_decomp_mask);
+
+		print_vector("d_compact_rle_counts", d_compact_rle_counts);
+			   
 		decompress <<<_blocks, 256>>> (d_compact_rle_chars_ptr, d_compact_rle_counts_ptr, d_decomp_mask_ptr, h_symbols.size(), d_decomp_rle_ptr);
 
 		h_out = d_decomp_rle;

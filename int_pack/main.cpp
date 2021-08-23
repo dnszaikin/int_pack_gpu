@@ -38,7 +38,7 @@ public:
 
 };
 
-constexpr int MAX_N{ 10 };
+constexpr int MAX_N{ 1'000'000 };
 
 int main()
 {
@@ -47,7 +47,7 @@ int main()
 	std::uniform_int_distribution<int> uni(1, 100); 
 
 	try {
-		ParallelRLE parle(true);
+		ParallelRLE parle(false);
 
 		timer t;
 
