@@ -3,45 +3,43 @@
 #include "IArchiver.h"
 
 class CpuRLE : public IArchiver {
-	int rleCpu(int *in, int n, int* symbolsOut, int* countsOut) {
+public:
 
-		if (n == 0)
-			return 0; // nothing to compress!
+	void encode(const thrust::host_vector<int>& h_in, thrust::host_vector<int>& h_symbols, thrust::host_vector<int>& h_counts) override
+	{
+		if (h_in.size() == 0) {
+			return;
+		}		
 
-		int outIndex = 0;
-		int symbol = in[0];
+		int symbol = h_in[0];
 		int count = 1;
 
-		for (int i = 1; i < n; ++i) {
-			if (in[i] != symbol) {
-				// run is over.
-				// So output run.
-				symbolsOut[outIndex] = symbol;
-				countsOut[outIndex] = count;
-				outIndex++;
+		for (int i = 1; i < h_in.size(); ++i) {
+			if (h_in[i] != symbol) {
+				h_symbols.push_back(symbol);
+				h_counts.push_back(count);
 
-				// and start new run:
-				symbol = in[i];
+				symbol = h_in[i];
 				count = 1;
 			}
 			else {
-				++count; // run is not over yet.
+				++count;
 			}
 		}
 
-		// output last run.
-		symbolsOut[outIndex] = symbol;
-		countsOut[outIndex] = count;
-		outIndex++;
-
-		return outIndex;
-	}
-public:
-
-	void encode(const std::vector<int>& in, std::vector<RLE>& out) override {
+		h_symbols.push_back(symbol);
+		h_counts.push_back(count);
 	}
 
-	void decode() override {
+	void decode(const thrust::host_vector<int>& h_symbols, const thrust::host_vector<int>& h_counts, thrust::host_vector<int>& h_out) override
+	{
+		for (int i = 0; i < h_symbols.size(); ++i) {
+			int symbol = h_symbols[i];
+			int count = h_counts[i];
 
+			for (int k = 0; k < count; ++k) {
+				h_out.push_back(symbol);
+			}
+		}
 	}
 };

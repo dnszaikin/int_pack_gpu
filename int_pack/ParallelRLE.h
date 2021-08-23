@@ -7,10 +7,17 @@
 class ParallelRLE :public IArchiver
 {
 private:
-	int _mp_cnt;
+	int _blocks;
 	bool _verbose;
 
-	void print_host_vector(const std::string& array_name, thrust::host_vector<int>& vec)
+	void print_vector(const std::string& array_name, const thrust::device_vector<int>& vec) const
+	{
+		if (_verbose) {
+			thrust::host_vector<int> h_tmp = vec;
+			print_vector(array_name, h_tmp);
+		}
+	}
+	void print_vector(const std::string& array_name, const thrust::host_vector<int>& vec) const
 	{
 		if (_verbose) {
 			cout << "printng " << array_name << endl;
@@ -21,57 +28,12 @@ private:
 			cout << endl << endl;
 		}
 	}
-
-	bool verify_compression(thrust::host_vector<int> original, thrust::host_vector<int> compressedSymbols, thrust::host_vector<int> compressedCounts, int totalRuns) {
-
-		// decompress.
-		thrust::host_vector<int> g_decompressed(original.size());
-
-		int sum = 0;
-		for (int i = 0; i < totalRuns; ++i) {
-			sum += compressedCounts[i];
-		}
-
-		if (sum != original.size()) {
-			cout << "Decompressed and original size not equal " << original.size() << " != " << sum;
-
-			for (int i = 0; i < totalRuns; ++i) {
-				int symbol = compressedSymbols[i];
-				int count = compressedCounts[i];
-
-				cout << count << "," << symbol << endl;
-			}
-			return false;
-		}
-
-		int j = 0;
-		for (int i = 0; i < totalRuns; ++i) {
-			int symbol = compressedSymbols[i];
-			int count = compressedCounts[i];
-
-			for (int k = 0; k < count; ++k) {
-				g_decompressed[j++] = symbol;
-			}
-		}
-
-		// verify the compression.
-		for (int i = 0; i < original.size(); ++i) {
-			if (original[i] != g_decompressed[i]) {
-
-				cout << "Decompressed and original not equal at " << i << original[i] << " != " <<  g_decompressed[i] << endl;
-				return false;
-			}
-		}
-
-		return true;
-	}
-
 public:
 
-	ParallelRLE(bool verbose = false): _mp_cnt(0), _verbose(verbose)
+	ParallelRLE(bool verbose = false): _blocks(0), _verbose(verbose)
 	{
 		try {
-			_mp_cnt = cuda::get_mp_count(0);
+			_blocks = 32*cuda::get_mp_count(0);
 			cuda::init(0);
 		}
 		catch (const cuda::cuda_exception& e) {
@@ -79,120 +41,116 @@ public:
 		}
 	}
 
-	void encode(const std::vector<int>& in, std::vector<RLE>& out) override
+	void encode(const thrust::host_vector<int>& h_in, thrust::host_vector<int>& h_symbols, thrust::host_vector<int>& h_counts) override
 	{
-		const int blocks = 32 * _mp_cnt;
+		
+		print_vector("h_rle", h_in);
 
-		thrust::host_vector<int> h_rle(in.begin(), in.end());
+		thrust::device_vector<int> d_rle { h_in };
+		thrust::device_vector<int> d_mask {};
 
-		print_host_vector("h_rle", h_rle);
+		d_mask.resize(h_in.size());
 
-		thrust::device_vector<int> d_rle = h_rle;
-		thrust::device_vector<int> d_mask;
+		int* d_rle_ptr { thrust::raw_pointer_cast(d_rle.data()) };
+		int* d_mask_ptr { thrust::raw_pointer_cast(d_mask.data()) };
 
-		d_mask.resize(h_rle.size());
+		mask << <_blocks, 256 >> > (d_rle_ptr, d_mask_ptr, h_in.size());
 
-		int* d_rle_ptr = thrust::raw_pointer_cast(d_rle.data());
-		int* d_mask_ptr = thrust::raw_pointer_cast(d_mask.data());
-
-		mask << <blocks, 256 >> > (d_rle_ptr, d_mask_ptr, h_rle.size());
-
-		thrust::host_vector<int> h_tmp = d_mask;
-
-		print_host_vector("d_mask", h_tmp);
+		print_vector("d_mask", d_mask);
 
 		thrust::inclusive_scan(thrust::device, d_mask.begin(), d_mask.end(), d_mask.begin());
 
-		h_tmp = d_mask;
-
-		print_host_vector("d_mask scanned", h_tmp);
+		print_vector("d_mask scanned", d_mask);
 		
-		thrust::device_vector<int> d_compact_mask;
+		thrust::device_vector<int> d_compact_mask {};
 
-		d_compact_mask.resize(h_rle.size());
+		d_compact_mask.resize(h_in.size());
 
 		thrust::device_vector<int> d_total_pairs(1);
 
-		int* d_compact_mask_ptr = thrust::raw_pointer_cast(d_compact_mask.data());
-		int* d_total_pairs_ptr = thrust::raw_pointer_cast(d_total_pairs.data());
+		int* d_compact_mask_ptr{ thrust::raw_pointer_cast(d_compact_mask.data()) };
+		int* d_total_pairs_ptr{ thrust::raw_pointer_cast(d_total_pairs.data()) };
 
-		compact << <blocks, 256 >> > (d_mask_ptr, d_compact_mask_ptr, d_total_pairs_ptr, h_rle.size());
+		compact << <_blocks, 256 >> > (d_mask_ptr, d_compact_mask_ptr, d_total_pairs_ptr, h_in.size());
+				
+		print_vector("d_compact_mask", d_compact_mask);
 
-		h_tmp = d_compact_mask;
+		thrust::host_vector<int> h_tmp = d_total_pairs;
 
-		print_host_vector("d_compact_mask",h_tmp);
+		int h_total_pairs{ h_tmp[0] };
 
-		h_tmp = d_total_pairs;
+		thrust::device_vector<int> d_compact_rle_chars{};
 
-		int h_total_pairs = h_tmp[0];
+		d_compact_rle_chars.resize(h_in.size());
 
-		thrust::device_vector<int> d_compact_rle_chars;
+		thrust::device_vector<int> d_compact_rle_counts{};
 
-		d_compact_rle_chars.resize(h_rle.size());
-
-		thrust::device_vector<int> d_compact_rle_counts;
-
-		d_compact_rle_counts.resize(h_rle.size());
+		d_compact_rle_counts.resize(h_in.size());
 
 		int* d_compact_rle_chars_ptr = thrust::raw_pointer_cast(d_compact_rle_chars.data());
 		int* d_compact_rle_counts_ptr = thrust::raw_pointer_cast(d_compact_rle_counts.data());
 
-		scatter << <blocks, 256 >> > (d_compact_mask_ptr, d_total_pairs_ptr, d_rle_ptr, d_compact_rle_chars_ptr, d_compact_rle_counts_ptr);
-
-		thrust::device_vector<int> d_decomp_rle;
-
-		d_decomp_rle.resize(h_rle.size());
-
-		int* d_decomp_rle_ptr = thrust::raw_pointer_cast(d_decomp_rle.data());
-
-		decompress << <blocks, 256 >> > (d_compact_rle_chars_ptr, d_compact_rle_counts_ptr, d_total_pairs_ptr, d_decomp_rle_ptr);
-
-		h_tmp = d_decomp_rle;
-
-		if (h_tmp.size() != h_rle.size()) {
-			cout << "Size mismatch " << h_tmp.size() << " != " << h_rle.size() << endl;
-		}
-
-		for (int i = 0; i< h_rle.size(); ++i) {
-			if (h_rle[i] != h_tmp[i]) {
-				cout << "Test failed!" << endl;
-				break;
-			}
-		}
-
-
-		print_host_vector("d_decomp_rle", h_tmp);
+		scatter << <_blocks, 256 >> > (d_compact_mask_ptr, h_total_pairs, d_rle_ptr, d_compact_rle_chars_ptr, d_compact_rle_counts_ptr);
 
 		cudaDeviceSynchronize();
 
 		d_compact_rle_chars.resize(h_total_pairs);
 		d_compact_rle_counts.resize(h_total_pairs);
 
-		h_tmp = d_compact_rle_chars;
+		print_vector("d_compact_rle_chars", d_compact_rle_chars);
 
-		print_host_vector("d_compact_rle_chars", h_tmp);
+		print_vector("d_compact_rle_counts", d_compact_rle_counts);
 
-		h_tmp = d_compact_rle_counts;
-
-		print_host_vector("d_compact_rle_counts", h_tmp);
-
-		cout << "Original size: " << h_rle.size() << endl;
+		cout << "Original size: " << h_in.size() << endl;
 		cout << "Compressed size: " << h_total_pairs * 2 << endl;
 
-		thrust::host_vector<int> h_compact_rle_chars = d_compact_rle_chars;
-		thrust::host_vector<int> h_compact_rle_counts = d_compact_rle_counts;
-
-		if (!verify_compression(h_rle, h_compact_rle_chars, h_compact_rle_counts, h_total_pairs)) {
-			cout << "Failed test!" << endl;
-		}
-		else {
-			cout << "passed test!" << endl;
-		}
+		h_symbols = d_compact_rle_chars;
+		h_counts = d_compact_rle_counts;
 	} 
 
-	void decode() override 
+	void decode(const thrust::host_vector<int>& h_symbols, const thrust::host_vector<int>& h_counts, thrust::host_vector<int>& h_out) override
 	{
+		thrust::device_vector<int> d_decomp_rle{};
 
+		d_decomp_rle.resize(h_out.size());
+
+		thrust::device_vector<int> d_decomp_mask{};
+
+		d_decomp_mask.resize(h_out.size());
+
+		thrust::device_vector<int> d_compact_rle_chars{};
+
+		d_compact_rle_chars = h_symbols;
+
+		thrust::device_vector<int> d_compact_rle_counts{};
+
+		d_compact_rle_counts = h_counts;
+
+		thrust::device_vector<int> d_total_pairs(1);
+
+		d_total_pairs[0] = h_symbols.size();
+
+		int* d_total_pairs_ptr{ thrust::raw_pointer_cast(d_total_pairs.data()) };
+
+		int* d_compact_rle_chars_ptr = thrust::raw_pointer_cast(d_compact_rle_chars.data());
+		int* d_compact_rle_counts_ptr = thrust::raw_pointer_cast(d_compact_rle_counts.data());
+		int* d_decomp_rle_ptr{ thrust::raw_pointer_cast(d_decomp_rle.data()) };
+		int* d_decomp_mask_ptr{ thrust::raw_pointer_cast(d_decomp_mask.data()) };
+
+		for (int i = 0; i < h_counts.size(); ++i) {
+			int j = 0;
+			for (int _i = 0; _i < i; ++_i) {
+				int count = h_counts[_i];
+				j += count;
+			}
+			d_decomp_mask[i] = j;
+		}
+
+		decompress <<<_blocks, 256>>> (d_compact_rle_chars_ptr, d_compact_rle_counts_ptr, d_decomp_mask_ptr, h_symbols.size(), d_decomp_rle_ptr);
+
+		h_out = d_decomp_rle;
+
+		print_vector("d_decomp_rle", h_out);
 	}
 
 	~ParallelRLE()

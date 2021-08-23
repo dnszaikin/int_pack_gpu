@@ -56,7 +56,7 @@
     </Link>
     <CudaCompile>
       <TargetMachinePlatform>64</TargetMachinePlatform>
-      <AdditionalOptions>-std=c++14 --expt-extended-lambda %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>-std=c++17 --expt-extended-lambda -Xcompiler "/openmp /Zc:__cplusplus" %(AdditionalOptions)</AdditionalOptions>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">

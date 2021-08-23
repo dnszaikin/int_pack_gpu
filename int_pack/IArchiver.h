@@ -1,10 +1,5 @@
 #pragma once
-#include <vector>
-
-struct RLE {
-	int symbol;
-	int count;
-};
+#include <thrust/host_vector.h>
 
 class IArchiver {
 public:
@@ -12,8 +7,8 @@ public:
 
 	}
 
-	virtual void encode(const std::vector<int>&, std::vector<RLE>&) = 0;
-	virtual void decode() = 0;
+	virtual void encode(const thrust::host_vector<int>&, thrust::host_vector<int>&, thrust::host_vector<int>&) = 0;
+	virtual void decode(const thrust::host_vector<int>&, const thrust::host_vector<int>&, thrust::host_vector<int>&) = 0;
 
 	virtual ~IArchiver() {
 

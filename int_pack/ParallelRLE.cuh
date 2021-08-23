@@ -63,10 +63,9 @@ __global__ void compact(int* d_mask, int* d_compact_mask, int* d_total_pairs, in
 	}
 }
 
-__global__ void scatter(int* d_comact_mask, int* d_total_pairs, int* d_in, int* d_comact_rle_chars, int* d_compact_rle_counts) {
-	int n = *d_total_pairs;
+__global__ void scatter(int* d_comact_mask, int d_total_pairs, int* d_in, int* d_comact_rle_chars, int* d_compact_rle_counts) {
 
-	for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x) {
+	for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < d_total_pairs; i += blockDim.x * gridDim.x) {
 		int a = d_comact_mask[i];
 		int b = d_comact_mask[i + 1];
 
@@ -77,31 +76,45 @@ __global__ void scatter(int* d_comact_mask, int* d_total_pairs, int* d_in, int* 
 
 __device__ int counter = 0;
 
-__global__ void decompress(int* d_compressed_symbols, int* d_compressed_counts, int* d_total_pairs, int* d_decompressed) {
-	int n = *d_total_pairs;
+//__global__ void decomp_mask(int* d_compressed_symbols, int* d_compressed_counts, int* d_compact_mask, int d_total_pairs, int* d_decompressed) {
+//
+//	for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < d_total_pairs; i += blockDim.x * gridDim.x) {
+//
+//		int j = 0;
+//
+//		for (int _i = 0; _i < i; ++_i) {
+//			int count = d_compressed_counts[_i];
+//			j += count;
+//		}
+//
+//		int symbol = d_compressed_symbols[i];
+//		int count = d_compressed_counts[i];
+//
+//		for (int k = 0; k < count; ++k) {
+//
+//			int current_val = atomicAdd(&counter, 1);
+//
+//			d_decompressed[j++] = symbol;
+//			//printf("%d\n", current_val);
+//		}
+//	}
+//}
 
-	for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < n; i += blockDim.x * gridDim.x) {
-
-		int j = 0;
-
-		for (int _i = 0; _i < i; ++_i) {
-			int count = d_compressed_counts[_i];
-			j += count;
-		}
+__global__ void decompress(int* d_compressed_symbols, int* d_compressed_counts, int* d_decomp_mask, int d_total_pairs, int* d_decompressed) {
+	
+	for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < d_total_pairs; i += blockDim.x * gridDim.x) {
+		
+		int j = d_decomp_mask[i];
 
 		int symbol = d_compressed_symbols[i];
 		int count = d_compressed_counts[i];
 
 		for (int k = 0; k < count; ++k) {
 
-			int current_val = atomicAdd(&counter, 1);
-
 			d_decompressed[j++] = symbol;
-			//printf("%d\n", current_val);
 		}
 	}	
 }
-
 
 thrust::device_vector<int> gpuEncoding(thrust::device_vector<int> rle) {
 	thrust::device_vector<int> arrayCompressed(rle.size());
