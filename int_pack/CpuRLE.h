@@ -1,11 +1,11 @@
 #pragma once
 
-#include "IArchiver.h"
+#include "RLEHelper.h"
 
-class CpuRLE : public IArchiver {
+class CpuRLE : public RLEHelper {
 public:
 
-	void encode(const thrust::host_vector<int>& h_in, thrust::host_vector<int>& h_symbols, thrust::host_vector<int>& h_counts) override
+	void encode(const thrust::host_vector<int>& h_in, thrust::host_vector<int>& h_symbols, thrust::host_vector<int>& h_counts) 
 	{
 		if (h_in.size() == 0) {
 			return;
@@ -31,14 +31,15 @@ public:
 		h_counts.push_back(count);
 	}
 
-	void decode(const thrust::host_vector<int>& h_symbols, const thrust::host_vector<int>& h_counts, thrust::host_vector<int>& h_out) override
+	void decode(const thrust::host_vector<int>& h_symbols, const thrust::host_vector<int>& h_counts, thrust::host_vector<int>& h_out) 
 	{
+		int j = 0;
 		for (int i = 0; i < h_symbols.size(); ++i) {
 			int symbol = h_symbols[i];
 			int count = h_counts[i];
 
 			for (int k = 0; k < count; ++k) {
-				h_out.push_back(symbol);
+				h_out[j++] = symbol;
 			}
 		}
 	}

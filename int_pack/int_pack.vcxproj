@@ -84,9 +84,10 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="CpuRLE.h" />
-    <ClInclude Include="ParallelRLE.cuh" />
+    <ClInclude Include="ParallelElegantPairs.h" />
+    <ClInclude Include="kernels.cuh" />
     <ClInclude Include="ParallelRLE.h" />
-    <ClInclude Include="IArchiver.h" />
+    <ClInclude Include="RLEHelper.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

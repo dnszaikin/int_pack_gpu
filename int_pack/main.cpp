@@ -2,7 +2,7 @@
 
 #include <omp.h>
 
-#if __cplusplus == 201703L
+#if __cplusplus >= 201703L
 #include <execution>
 #endif
 
@@ -10,6 +10,7 @@
 
 #include "ParallelRLE.h"
 #include "CpuRLE.h"
+#include "ParallelElegantPairs.h"
 
 using namespace std;
 
@@ -47,14 +48,15 @@ int main()
 	std::uniform_int_distribution<int> uni(1, 100); 
 
 	try {
-		ParallelRLE parle(false);
 
 		timer t;
 
 		t.start();
 		thrust::host_vector<int> data(MAX_N);
+		thrust::host_vector<int> out_data(MAX_N); //suppose we have some meta data to determine decomp size
 
-#if __cplusplus == 201703L
+		//generating badly compressible data
+#if __cplusplus >= 201703L
 
 		std::for_each(std::execution::par_unseq, data.begin(), data.end(), [&](int& i) { i = uni(rng);  });
 #else
@@ -75,15 +77,50 @@ int main()
 		thrust::host_vector<int> h_symbols{};
 		thrust::host_vector<int> h_counts{};
 
+		ParallelRLE parle{};
+
+		//parle.set_verbose();
+
 		parle.encode(data, h_symbols, h_counts);
 
 		t.stop();
 
 		cout << "GPU Encode data takes: " << t.duration_millis() << " millis\n";
 
+		ParallelElegantPairs papairs;
+
+		//papairs.set_verbose();
+
+		t.start();
+		
+		papairs.encode(h_symbols, h_counts, out_data);
+
+		t.stop();
+
+		cout << "Parallel elegant pairs encode takes: " << t.duration_millis() << " millis\n";
+		cout << "Original size: " << data.size() << endl;
+		cout << "Compressed size: " << h_counts.size()*2 << endl;
+		cout << "Compressed size with elegant pairs: " << out_data.size() << endl;
+
+		t.start();
+		size_t s{ h_symbols.size() };
+
+		h_symbols.clear();
+		h_symbols.resize(s);
+		h_counts.clear();
+		h_counts.resize(s);
+
+		papairs.decode(out_data, h_symbols, h_counts);
+
+		t.stop();
+
+		cout << "Parallel elegant pairs decode takes: " << t.duration_millis() << " millis\n";
+		cout << "Uncompressed size with elegant pairs: " << h_symbols.size() * 2 << endl;
+		
 		t.start();
 
-		thrust::host_vector<int> out_data(MAX_N); //suppose we have meta data to determine size
+		out_data.clear();
+		out_data.resize(MAX_N);
 
 		parle.decode(h_symbols, h_counts, out_data);
 
@@ -97,7 +134,7 @@ int main()
 
 		if (data.size() == out_data.size()) {
 			
-#if __cplusplus == 201703L
+#if __cplusplus >= 201703L
 			equal = std::equal(std::execution::par_unseq, data.begin(), data.end(), out_data.begin());
 #else
 			long i{ 0 };
@@ -135,7 +172,9 @@ int main()
 		cout << "CPU Encode data takes: " << t.duration_millis() << " millis\n";
 
 		t.start();
-			
+		
+		out_data.resize(MAX_N);
+
 		rle.decode(h_symbols, h_counts, out_data);
 
 		t.stop();
@@ -150,7 +189,7 @@ int main()
 
 		cout << "CPU Verify data takes: " << t.duration_millis() << " millis\n";
 
-		cout << "Vectors equals: " << std::boolalpha << equal << endl;
+		cout << "Vectors equals: " << std::boolalpha << success << endl;
 
 	}
 	catch (const std::exception& e) {

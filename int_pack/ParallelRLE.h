@@ -1,36 +1,18 @@
 #pragma once
 
-#include "IArchiver.h"
-#include "ParallelRLE.cuh"
+#include "RLEHelper.h"
+#include "kernels.cuh"
 #include "cuda_util.h"
 
-class ParallelRLE :public IArchiver
+using namespace std;
+class ParallelRLE :public RLEHelper
 {
 private:
 	int _blocks;
-	bool _verbose;
 
-	void print_vector(const std::string& array_name, const thrust::device_vector<int>& vec) const
-	{
-		if (_verbose) {
-			thrust::host_vector<int> h_tmp = vec;
-			print_vector(array_name, h_tmp);
-		}
-	}
-	void print_vector(const std::string& array_name, const thrust::host_vector<int>& vec) const
-	{
-		if (_verbose) {
-			cout << "printng " << array_name << endl;
-			for (int i = 0; i < vec.size(); i++) {
-				cout << vec[i] << " ";
-			}
-
-			cout << endl << endl;
-		}
-	}
 public:
 
-	ParallelRLE(bool verbose = false): _blocks(0), _verbose(verbose)
+	ParallelRLE(): _blocks(0)
 	{
 		try {
 			_blocks = 32*cuda::get_mp_count(0);
@@ -41,7 +23,7 @@ public:
 		}
 	}
 
-	void encode(const thrust::host_vector<int>& h_in, thrust::host_vector<int>& h_symbols, thrust::host_vector<int>& h_counts) override
+	void encode(const thrust::host_vector<int>& h_in, thrust::host_vector<int>& h_symbols, thrust::host_vector<int>& h_counts) 
 	{
 		
 		print_vector("h_rle", h_in);
@@ -90,7 +72,7 @@ public:
 		int* d_compact_rle_chars_ptr = thrust::raw_pointer_cast(d_compact_rle_chars.data());
 		int* d_compact_rle_counts_ptr = thrust::raw_pointer_cast(d_compact_rle_counts.data());
 
-		scatter << <_blocks, 256 >> > (d_compact_mask_ptr, h_total_pairs, d_rle_ptr, d_compact_rle_chars_ptr, d_compact_rle_counts_ptr);
+		encode_gpu << <_blocks, 256 >> > (d_compact_mask_ptr, h_total_pairs, d_rle_ptr, d_compact_rle_chars_ptr, d_compact_rle_counts_ptr);
 
 		cudaDeviceSynchronize();
 
@@ -101,14 +83,11 @@ public:
 
 		print_vector("d_compact_rle_counts", d_compact_rle_counts);
 
-		cout << "Original size: " << h_in.size() << endl;
-		cout << "Compressed size: " << h_total_pairs * 2 << endl;
-
 		h_symbols = d_compact_rle_chars;
 		h_counts = d_compact_rle_counts;
 	} 
 
-	void decode(const thrust::host_vector<int>& h_symbols, const thrust::host_vector<int>& h_counts, thrust::host_vector<int>& h_out) override
+	void decode(const thrust::host_vector<int>& h_symbols, const thrust::host_vector<int>& h_counts, thrust::host_vector<int>& h_out) 
 	{
 		thrust::device_vector<int> d_decomp_rle{};
 
@@ -151,7 +130,7 @@ public:
 
 		print_vector("d_compact_rle_counts", d_compact_rle_counts);
 			   
-		decompress <<<_blocks, 256>>> (d_compact_rle_chars_ptr, d_compact_rle_counts_ptr, d_decomp_mask_ptr, h_symbols.size(), d_decomp_rle_ptr);
+		decode_gpu <<<_blocks, 256>>> (d_compact_rle_chars_ptr, d_compact_rle_counts_ptr, d_decomp_mask_ptr, h_symbols.size(), d_decomp_rle_ptr);
 
 		h_out = d_decomp_rle;
 
